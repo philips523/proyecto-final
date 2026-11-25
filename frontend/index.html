@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tatypeluqueria - Turnos</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; background: #f7f7f7; color: #222; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    button { padding: 8px 12px; cursor: pointer; margin-right: 6px; }
+    select, input { padding: 7px; margin-right: 8px; margin-bottom: 8px; }
+    pre { background: #f0f0f0; padding: 10px; border-radius: 6px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>tatypeluqueria</h1>
+  <p>Lunes a viernes de 11:00 a 18:00 (último turno 17:30) · Bloques de 30 min · Hasta 5 turnos simultáneos · Sin pagos ni correos reales</p>
+
+  <div class="card">
+    <strong>Rol activo:</strong>
+    <select id="rolSelect">
+      <option value="cli-1">Cliente Demo (Rol: Cliente)</option>
+      <option value="adm-1">Administrador Demo (Rol: Administrador)</option>
+    </select>
+    <div style="margin-top: 10px;">
+      <strong>Reloj simulado:</strong> <span id="relojTexto">Cargando...</span>
+      <button onclick="avanzarReloj(30)">+30 min</button>
+      <button onclick="avanzarReloj(120)">+2 horas</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Reservar turno</h3>
+    <select id="servicioSelect"></select>
+    <input id="fechaHoraInput" type="datetime-local" />
+    <button onclick="crearTurno()">Confirmar reserva</button>
+    <div id="mensajeReserva" style="margin-top: 8px; font-weight: bold;"></div>
+  </div>
+
+  <div class="card">
+    <h3>Turnos</h3>
+    <div id="listaTurnos">Sin turnos todavía.</div>
+  </div>
+
+  <div class="card">
+    <h3>Bandeja de correos simulados</h3>
+    <pre id="listaCorreos">[]</pre>
+  </div>
+
+  <div class="card">
+    <h3>Agente IA (acotado a tatypeluqueria)</h3>
+    <input id="preguntaIa" type="text" placeholder="Ej: precios, horarios, cancelar..." style="width: 60%;" />
+    <button onclick="consultarIa()">Preguntar</button>
+    <p id="respuestaIa"></p>
+  </div>
+
+  <script>
+    async function cargarEstado() {
+      const res = await fetch("/api/estado");
+      const data = await res.json();
+
+      document.getElementById("relojTexto").textContent = data.relojSimulado;
+
+      const sel = document.getElementById("servicioSelect");
+      if (sel.options.length === 0) {
+        data.servicios.forEach((s) => {
+          const opt = document.createElement("option");
+          opt.value = s.id;
+          opt.textContent = `${s.nombre} - $${s.precio} (${s.duracionMinutos} min)`;
+          sel.appendChild(opt);
+        });
+      }
+
+      const inp = document.getElementById("fechaHoraInput");
+      if (!inp.value && data.relojSimulado) {
+        const d = new Date(data.relojSimulado);
+        d.setHours(11, 0, 0, 0);
+        const pad = (n) => String(n).padStart(2, "0");
+        inp.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+
+      const turnosDiv = document.getElementById("listaTurnos");
+      if (!data.turnos.length) {
+        turnosDiv.textContent = "Sin turnos todavía.";
+      } else {
+        turnosDiv.innerHTML = data.turnos.map((t) => `
+          <div style="border-bottom:1px solid #eee; padding:8px 0;">
+            <b>${t.id}</b> · ${t.servicioNombre} ($${t.precio}) · ${t.clienteNombre} · Inicio: ${t.fechaHoraInicio} · Estado: <b>${t.estado}</b>
+            ${t.estado === "Confirmado" ? `<button onclick="cancelarTurno('${t.id}')">Cancelar</button>` : ""}
+          </div>
+        `).join("");
+      }
+
+      document.getElementById("listaCorreos").textContent = JSON.stringify(data.correosSimulados, null, 2);
+    }
+
+    async function avanzarReloj(minutos) {
+      await fetch("/api/reloj/avanzar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ minutos })
+      });
+      cargarEstado();
+    }
+
+    async function crearTurno() {
+      const clienteId = document.getElementById("rolSelect").value;
+      const servicioId = document.getElementById("servicioSelect").value;
+      const rawVal = document.getElementById("fechaHoraInput").value;
+      const fechaHoraInicio = rawVal ? new Date(rawVal).toISOString() : "";
+
+      const res = await fetch("/api/turnos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clienteId, servicioId, fechaHoraInicio })
+      });
+      const data = await res.json();
+      document.getElementById("mensajeReserva").textContent = data.error || `Turno creado: ${data.turno.id}`;
+      cargarEstado();
+    }
+
+    async function cancelarTurno(turnoId) {
+      const usuarioId = document.getElementById("rolSelect").value;
+      const res = await fetch(`/api/turnos/${turnoId}/cancelar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ usuarioId })
+      });
+      const data = await res.json();
+      document.getElementById("mensajeReserva").textContent = data.error || `Turno ${turnoId} cancelado`;
+      cargarEstado();
+    }
+
+    async function consultarIa() {
+      const pregunta = document.getElementById("preguntaIa").value;
+      const res = await fetch("/api/ia/consultar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pregunta })
+      });
+      const data = await res.json();
+      document.getElementById("respuestaIa").textContent = data.respuesta;
+    }
+
+    cargarEstado();
+  </script>
+</body>
+</html>
